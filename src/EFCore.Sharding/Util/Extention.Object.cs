@@ -1,14 +1,26 @@
 ﻿using Castle.DynamicProxy;
 using Dynamitey;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Serialization;
 using System;
 using System.ComponentModel;
 using System.Reflection;
 
-namespace EFCore.Sharding.Util
+namespace EFCore.Sharding
 {
     internal static partial class Extention
     {
+        static Extention()
+        {
+            JsonConvert.DefaultSettings = () => DefaultJsonSetting;
+        }
+        public static JsonSerializerSettings DefaultJsonSetting = new JsonSerializerSettings
+        {
+            ContractResolver = new DefaultContractResolver(),
+            DateFormatHandling = DateFormatHandling.MicrosoftDateFormat,
+            DateFormatString = "yyyy-MM-dd HH:mm:ss.fff"
+        };
+
         private static readonly BindingFlags _bindingFlags
             = BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public | BindingFlags.Static;
         private static readonly ProxyGenerator Generator = new ProxyGenerator();

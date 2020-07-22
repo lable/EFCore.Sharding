@@ -7,9 +7,9 @@
   - [按时间自动分表](#按时间自动分表)
   - [性能测试](#性能测试)
   - [其它简单操作(非Sharing)](#其它简单操作非sharing)
-- [常用配置](#常用配置)
-  - [多主键支持](#多主键支持)
-  - [索引支持](#索引支持)
+- [高级配置](#高级配置)
+  - [多主键等配置](#多主键等配置)
+  - [读写分离](#读写分离)
 - [注意事项](#注意事项)
 - [总结](#总结)
 
@@ -37,31 +37,30 @@
 ## 配置
 ```c#
 
-ShardingConfig.Init(config =>
+ServiceCollection services = new ServiceCollection();
+//配置初始化
+services.AddEFCoreSharding(config =>
 {
-    config.AddAbsDb(DatabaseType.SQLite)
-        .AddPhysicDb(ReadWriteType.Read | ReadWriteType.Write, "DataSource=db.db")
-        .AddPhysicDbGroup()
-        .SetHashModShardingRule<Base_UnitTest>(nameof(Base_UnitTest.Id), 3);
+    //添加数据源
+    config.AddDataSource(Config.CONSTRING1, ReadWriteType.Read | ReadWriteType.Write, DatabaseType.SqlServer);
+
+    //对3取模分表
+    config.SetHashModSharding<Base_UnitTest>(nameof(Base_UnitTest.Id), 3);
 });
 ```
 上述代码中完成了Sharding配置
-
-- **AddAbsDb**是指添加抽象数据库,抽象数据库就是将多个分库看成同一个数据库来进行操作
-- **AddPhysicDbGroup**是指添加物理数据库组,在同一组物理数据库中,它们数据库类型相同,拥有的表相同,每个数据库拥有的数据是一致的(之间通过主主复制或主从复制进行数据同步)
-- **AddPhysicTable**是指添加物理数据表,传入的Base_UnitTest是抽象数据表(即将Base_UnitTest拆分为Base_UnitTest_0~2)
-- **SetHashModShardingRule**是采用哈希取模的分表规则,分表字段为**Id**,取模值为**3**,会自动生成表Base_UnitTest_0,Base_UnitTest_1,Base_UnitTest_2
+- **AddEFCoreSharding**注入EFCoreSharding
+- **AddDataSource**添加分表数据源
+- **SetHashModSharding**是采用哈希取模的分表规则,分表字段为**Id**,取模值为**3**,会自动生成表Base_UnitTest_0,Base_UnitTest_1,Base_UnitTest_2
 
 ## 使用
-配置完成，下面开始使用，使用方式**非常简单**，与平常使用基本一致
-首先获取分片仓储接口IShardingDbAccessor
+配置完成，下面开始使用，使用方式**非常简单**，与平常使用基本一致  
+首先通过注入获取到IShardingDbAccessor
 
 ```c#
-using(IShardingDbAccessor _db = DbFactory.GetShardingDbAccessor())
-{
-
-}
+var db=ServiceProvider.GetService<IShardingDbAccessor>();
 ```
+
 然后即可进行数据操作：
 
 ```c#
@@ -106,18 +105,16 @@ _db.Update(_newData);
 //更新多条数据
 _db.Update(_insertList);
 //更新单条数据指定属性
-_db.UpdateAny(_newData, new List<string> { "UserName", "Age" });
+_db.Update(_newData, new List<string> { "UserName", "Age" });
 //更新多条数据指定属性
-_db.UpdateAny(_insertList, new List<string> { "UserName", "Age" });
+_db.Update(_insertList, new List<string> { "UserName", "Age" });
 //更新指定条件数据
-_db.UpdateWhere<Base_UnitTest>(x => x.UserId == "Admin", x =>
+_db.Update<Base_UnitTest>(x => x.UserId == "Admin", x =>
 {
     x.UserId = "Admin2";
 });
 //GetList获取表的所有数据
 var list=_db.GetList<Base_UnitTest>();
-//GetIQPagination获取分页后的数据
-var list=_db.GetIShardingQueryable<Base_UnitTest>().GetPagination(pagination);
 //Max
 var max=_db.GetIShardingQueryable<Base_UnitTest>().Max(x => x.Age);
 //Min
@@ -145,36 +142,44 @@ Assert.AreEqual(succcess, false);
 
 using EFCore.Sharding;
 using EFCore.Sharding.Tests;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System;
-using System.Threading;
+using System.Threading.Tasks;
 
-namespace Demo.AutoExpandByDate
+namespace Demo.DateSharding
 {
     class Program
     {
-        static void Main(string[] args)
+        static async Task Main(string[] args)
         {
             DateTime startTime = DateTime.Now.AddMinutes(-5);
-            DateTime endTime = DateTime.MaxValue;
-
-            //配置初始化
-            ShardingConfig.Init(config =>
+            ServiceCollection services = new ServiceCollection();
+            services.AddLogging(config =>
             {
-                config.AddAbsDb(DatabaseType.SqlServer)//添加抽象数据库
-                    .AddPhysicDbGroup()//添加物理数据库组
-                    .AddPhysicDb(ReadWriteType.Read | ReadWriteType.Write, Config.CONSTRING1)//添加物理数据库1
-                    .SetDateShardingRule<Base_UnitTest>(nameof(Base_UnitTest.CreateTime))//设置分表规则
-                    .AutoExpandByDate<Base_UnitTest>(//设置为按时间自动分表
-                        ExpandByDateMode.PerMinute,
-                        (startTime, endTime, ShardingConfig.DefaultDbGourpName)
-                        );
+                config.AddConsole();
             });
-            var db = DbFactory.GetShardingDbAccessor();
+            //配置初始化
+            services.AddEFCoreSharding(config =>
+            {
+                //添加数据源
+                config.AddDataSource(Config.CONSTRING1, ReadWriteType.Read | ReadWriteType.Write, DatabaseType.SqlServer);
+
+                //按分钟分表
+                config.SetDateSharding<Base_UnitTest>(nameof(Base_UnitTest.CreateTime), ExpandByDateMode.PerMinute, startTime);
+            });
+            var serviceProvider = services.BuildServiceProvider();
+
+            using var scop = serviceProvider.CreateScope();
+
+            var db = scop.ServiceProvider.GetService<IShardingDbAccessor>();
+            var logger = scop.ServiceProvider.GetService<ILogger<Program>>();
+
             while (true)
             {
                 try
                 {
-                    db.Insert(new Base_UnitTest
+                    await db.InsertAsync(new Base_UnitTest
                     {
                         Id = Guid.NewGuid().ToString(),
                         Age = 1,
@@ -183,17 +188,17 @@ namespace Demo.AutoExpandByDate
                     });
 
                     DateTime time = DateTime.Now.AddMinutes(-2);
-                    var count = db.GetIShardingQueryable<Base_UnitTest>()
+                    var count = await db.GetIShardingQueryable<Base_UnitTest>()
                         .Where(x => x.CreateTime >= time)
-                        .Count();
-                    Console.WriteLine($"当前数据量:{count}");
+                        .CountAsync();
+                    logger.LogWarning("当前数据量:{Count}", count);
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine(ex.Message);
                 }
 
-                Thread.Sleep(50);
+                await Task.Delay(1000);
             }
         }
     }
@@ -212,9 +217,12 @@ namespace Demo.AutoExpandByDate
 ```c#
 using EFCore.Sharding;
 using EFCore.Sharding.Tests;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.Diagnostics;
 using System.Linq;
+using System.Linq.Expressions;
 
 namespace Demo.Performance
 {
@@ -222,43 +230,55 @@ namespace Demo.Performance
     {
         static void Main(string[] args)
         {
-            ShardingConfig.Init(config =>
+            ServiceCollection services = new ServiceCollection();
+            services.AddEFCoreSharding(config =>
             {
-                config.AddAbsDb(DatabaseType.SqlServer)
-                    .AddPhysicDb(ReadWriteType.Read | ReadWriteType.Write, Config.CONSTRING1)
-                    .AddPhysicDbGroup()
-                    .SetHashModShardingRule<Base_UnitTest>(nameof(Base_UnitTest.Id), 3);
+                config.UseDatabase(Config.CONSTRING1, DatabaseType.SqlServer);
+
+                //添加数据源
+                config.AddDataSource(Config.CONSTRING1, ReadWriteType.Read | ReadWriteType.Write, DatabaseType.SqlServer);
+
+                //对3取模分表
+                config.SetHashModSharding<Base_UnitTest>(nameof(Base_UnitTest.Id), 3);
             });
+            var serviceProvider = services.BuildServiceProvider();
 
-            DateTime time1 = DateTime.Now;
-            DateTime time2 = DateTime.Now;
-
-            var db = DbFactory.GetDbAccessor(Config.CONSTRING1, DatabaseType.SqlServer);
+            var db = serviceProvider.GetService<IDbAccessor>();
+            var shardingDb = serviceProvider.GetService<IShardingDbAccessor>();
             Stopwatch watch = new Stopwatch();
 
+            Expression<Func<Base_UnitTest, bool>> where = x => EF.Functions.Like(x.UserName, $"%00001C22-8DD2-4D47-B500-407554B099AB%");
+
             var q = db.GetIQueryable<Base_UnitTest>()
-                .Where(x => x.UserName.Contains("00001C22-8DD2-4D47-B500-407554B099AB"))
+                .Where(where)
+                .OrderByDescending(x => x.Id)
+                .Skip(0)
+                .Take(30);
+            var shardingQ = shardingDb.GetIShardingQueryable<Base_UnitTest>()
+                .Where(where)
                 .OrderByDescending(x => x.Id)
                 .Skip(0)
                 .Take(30);
 
+            //先执行一次预热
             q.ToList();
-            q.ToSharding().ToList();
+            shardingQ.ToList();
+
             watch.Restart();
             var list1 = q.ToList();
             watch.Stop();
             Console.WriteLine($"未分表耗时:{watch.ElapsedMilliseconds}ms");
             watch.Restart();
-            var list2 = q.ToSharding().ToList();
+            var list2 = shardingQ.ToList();
             watch.Stop();
             Console.WriteLine($"分表后耗时:{watch.ElapsedMilliseconds}ms");
 
             Console.WriteLine("完成");
-
             Console.ReadLine();
         }
     }
 }
+
 
 ```
 
@@ -272,85 +292,82 @@ namespace Demo.Performance
 
 ## 其它简单操作(非Sharing)
 框架不仅支持Sharing,而且封装了常用数据库操作,使用比较简单  
-详细使用方式参考 [链接](https://github.com/Coldairarrow/EFCore.Sharding/blob/master/examples/Demo.DI/Program.cs)
+详细使用方式参考 [链接](https://github.com/Coldairarrow/EFCore.Sharding/blob/master/src/EFCore.Sharding.Tests/DbAccessor/DbAccessorTest.cs)
 
-# 常用配置
-## 多主键支持
-在实体类上加上EFCore.Sharding.DataAnnotations.Keys特性即可  
-自动建表时会自动创建主键  
+# 高级配置
+## 多主键等配置
+
+多主键、索引等高级配置请使用**IEntityTypeConfiguration**
+参考[fluentApi](https://www.learnentityframeworkcore.com/configuration/fluent-api)
+
+## 读写分离
+数据库读写分离在大型项目中十分常见,通常在数据库层完成自动读写分离  
+- MySQL可以使用ProxySQL完成全自动读写分离集群  
+- PostgreSQL可以使用Pgool完成全自动读写分离集群  
+- SQLServer可以使用AlwaysOn,但是需要在连接字符串中加上 ApplicationIntent=ReadOnly,因此只是**半自动**的  
+本框架支持将半自动读写分离升级成全自动,即在代码层无需感知读写分离切换,代码层只需跟普通一样使用IDbAccessor即可  
+代码如下([链接](https://github.com/Coldairarrow/EFCore.Sharding/blob/master/examples/Demo.ReadWrite/Program.cs))  
 ```c#
-    /// <summary>
-    /// 单元测试表
-    /// </summary>
-    [Table("Base_UnitTest")]
-    [Index(false, nameof(CreateTime))]
-    [Index(false, nameof(Age))]
-    [Keys(nameof(Id), nameof(UserName))]
-    public class Base_UnitTest
+using EFCore.Sharding;
+using EFCore.Sharding.Tests;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using System;
+using System.Threading.Tasks;
+
+namespace Demo.ReadWrite
+{
+    class Program
     {
-        /// <summary>
-        /// 代理主键
-        /// </summary>
-        [Key, StringLength(50)]
-        public String Id { get; set; }
+        static async Task Main(string[] args)
+        {
+            ServiceCollection services = new ServiceCollection();
+            services.AddLogging(config =>
+            {
+                config.AddConsole();
+            });
+            services.AddEFCoreSharding(config =>
+            {
+                config.SetEntityAssembly("EFCore.Sharding");
 
-        /// <summary>
-        /// 创建时间
-        /// </summary>
-        public DateTime CreateTime { get; set; }
+                //SQLITE1作为主库(写库)
+                //SQLITE2作为从库(读库)
+                config.UseDatabase(new (string, ReadWriteType)[]
+                {
+                    (Config.SQLITE1, ReadWriteType.Write),
+                    (Config.SQLITE2, ReadWriteType.Read)
+                }, DatabaseType.SQLite);
+            });
+            var serviceProvider = services.BuildServiceProvider();
 
-        /// <summary>
-        /// 用户名
-        /// </summary>
-        public String UserName { get; set; }
+            using var scop = serviceProvider.CreateScope();
+            //拿到注入的IDbAccessor即可进行所有数据库操作
+            var db = scop.ServiceProvider.GetService<IDbAccessor>();
+            var logger = scop.ServiceProvider.GetService<ILogger<Program>>();
+            while (true)
+            {
+                await db.InsertAsync(new Base_UnitTest
+                {
+                    Age = 100,
+                    CreateTime = DateTime.Now,
+                    Id = Guid.NewGuid().ToString(),
+                    UserId = Guid.NewGuid().ToString(),
+                    UserName = Guid.NewGuid().ToString()
+                });
+                var count = await db.GetIQueryable<Base_UnitTest>().CountAsync();
 
-        /// <summary>
-        /// Age
-        /// </summary>
-        public Int32? Age { get; set; }
+                //注意:这里数量始终为0,因为SQLITE1与SQLITE2没有开启主从复制
+                //在实际使用中应在数据库层开启主从复制
+                logger.LogWarning("当前数量:{Count}", count);
+
+                await Task.Delay(1000);
+            }
+        }
     }
+}
 
 ```
-
-## 索引支持
-在实体类上加上EFCore.Sharding.DataAnnotations.Index特性即可  
-可以设置多个Index特性  
-自动建表时会自动创建索引
-
-```c#
-    /// <summary>
-    /// 单元测试表
-    /// </summary>
-    [Table("Base_UnitTest")]
-    [Index(false, nameof(CreateTime))]
-    [Index(false, nameof(Age))]
-    [Keys(nameof(Id), nameof(UserName))]
-    public class Base_UnitTest
-    {
-        /// <summary>
-        /// 代理主键
-        /// </summary>
-        [Key, StringLength(50)]
-        public String Id { get; set; }
-
-        /// <summary>
-        /// 创建时间
-        /// </summary>
-        public DateTime CreateTime { get; set; }
-
-        /// <summary>
-        /// 用户名
-        /// </summary>
-        public String UserName { get; set; }
-
-        /// <summary>
-        /// Age
-        /// </summary>
-        public Int32? Age { get; set; }
-    }
-
-```
-
 # 注意事项
 
 - 查询尽量使用分表字段进行筛选，避免全表扫描

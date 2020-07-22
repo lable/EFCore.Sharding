@@ -1,8 +1,6 @@
 ﻿using Dynamitey;
-using EFCore.Sharding.Util;
 using System;
 using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations.Schema;
 using System.Linq;
 using System.Linq.Dynamic.Core;
 using System.Linq.Expressions;
@@ -11,31 +9,12 @@ namespace EFCore.Sharding
 {
     internal static class ShardingHelper
     {
-        public static Type MapTable(Type absTable, string targetTableName)
-        {
-            var config = TypeBuilderHelper.GetConfig(absTable);
-
-            config.AssemblyName = "EFCore.Sharding";
-
-            var theTableAttribute = config.Attributes
-                .Where(x => x.Attribute == typeof(TableAttribute))
-                .FirstOrDefault();
-            if (theTableAttribute != null)
-            {
-                theTableAttribute.ConstructorArgs[0] = targetTableName;
-            }
-
-            config.FullName = $"EFCore.Sharding.{targetTableName}";
-
-            return TypeBuilderHelper.BuildType(config);
-        }
-
-        public static List<string> FilterTable(IQueryable queryable, List<string> tables, ShardingRule rule)
+        public static List<string> FilterTable(IQueryable queryable, List<string> tableSuffixs, ShardingRule rule)
         {
             FilterTableVisitor visitor = rule.ShardingType switch
             {
-                ShardingType.HashMod => new FilterTableByHashModVisitor(tables, rule),
-                ShardingType.Date => new FilterTableByDateVisitor(tables, rule),
+                ShardingType.HashMod => new FilterTableByHashModVisitor(tableSuffixs, rule),
+                ShardingType.Date => new FilterTableByDateVisitor(tableSuffixs, rule),
                 _ => throw new Exception("ShardingType无效")
             };
 
@@ -46,17 +25,17 @@ namespace EFCore.Sharding
 
         private abstract class FilterTableVisitor : ExpressionVisitor
         {
-            protected readonly List<string> _allTables;
+            protected readonly List<string> _allTableSuffixs;
             protected readonly ShardingRule _rule;
-            public FilterTableVisitor(List<string> allTables, ShardingRule rule)
+            public FilterTableVisitor(List<string> allTableSuffixs, ShardingRule rule)
             {
-                _allTables = allTables;
+                _allTableSuffixs = allTableSuffixs;
                 _rule = rule;
             }
             protected bool IsParamter(Expression expression)
             {
                 return expression is MemberExpression member
-                    && member.Expression.Type == _rule.AbsTableType
+                    && member.Expression.Type == _rule.EntityType
                     && member.Member.Name == _rule.ShardingField;
             }
             protected bool IsConstant(Expression expression)
@@ -84,13 +63,13 @@ namespace EFCore.Sharding
         private class FilterTableByDateVisitor : FilterTableVisitor
         {
             private Expression<Func<int, bool>> _where = x => true;
-            public FilterTableByDateVisitor(List<string> allTables, ShardingRule rule)
-                : base(allTables, rule)
+            public FilterTableByDateVisitor(List<string> allTableSuffixs, ShardingRule rule)
+                : base(allTableSuffixs, rule)
             {
             }
             public override List<string> GetResTables()
             {
-                return _allTables.Where(x => _where.Compile()(_allTables.IndexOf(x))).ToList();
+                return _allTableSuffixs.Where(x => _where.Compile()(_allTableSuffixs.IndexOf(x))).ToList();
             }
             protected override Expression VisitMethodCall(MethodCallExpression node)
             {
@@ -148,9 +127,9 @@ namespace EFCore.Sharding
 
                     string op = binaryExpression.NodeType switch
                     {
-                        ExpressionType.GreaterThan => paramterAtLeft ? ">" : "<",
+                        ExpressionType.GreaterThan => paramterAtLeft ? ">=" : "<=",
                         ExpressionType.GreaterThanOrEqual => paramterAtLeft ? ">=" : "<=",
-                        ExpressionType.LessThan => paramterAtLeft ? "<" : ">",
+                        ExpressionType.LessThan => paramterAtLeft ? "<=" : ">=",
                         ExpressionType.LessThanOrEqual => paramterAtLeft ? "<=" : ">=",
                         ExpressionType.Equal => "==",
                         ExpressionType.NotEqual => "!=",
@@ -160,17 +139,22 @@ namespace EFCore.Sharding
                     if (op == null || value == null)
                         return x => true;
 
-                    string tableName = $"{_rule.AbsTable}_{value.Value:yyyyMMddHHmmss}";
-                    var newTables = _allTables.Concat(new string[] { tableName }).OrderBy(x => x).ToList();
-                    int index = newTables.IndexOf(tableName);
+                    string realSuffix = _rule.GetTableSuffixByField(value.Value);
+                    int index = _allTableSuffixs.IndexOf(realSuffix);
 
-                    if (binaryExpression.NodeType == ExpressionType.GreaterThan
-                        || binaryExpression.NodeType == ExpressionType.GreaterThanOrEqual
-                        || binaryExpression.NodeType == ExpressionType.Equal
-                        || binaryExpression.NodeType == ExpressionType.NotEqual
-                        )
+                    //超出范围
+                    if (index == -1)
                     {
-                        index = index - 1;
+                        string fullSuffix = value.Value.ToString("yyyyMMddHHmmss");
+                        var newTableSuffixs = _allTableSuffixs.Concat(new string[] { fullSuffix }).OrderBy(x => x).ToList();
+                        int fullIndex = newTableSuffixs.IndexOf(fullSuffix);
+
+                        if (fullIndex == 0 && (op == ">=" || op == "!="))
+                            return x => true;
+                        else if (fullIndex == newTableSuffixs.Count - 1 && (op == "<=" || op == "!="))
+                            return x => true;
+                        else
+                            return x => false;
                     }
 
                     var newWhere = DynamicExpressionParser.ParseLambda<int, bool>(
@@ -190,7 +174,7 @@ namespace EFCore.Sharding
             }
             public override List<string> GetResTables()
             {
-                return _allTables.Where(_where.Compile()).ToList();
+                return _allTableSuffixs.Where(_where.Compile()).ToList();
             }
             protected override Expression VisitMethodCall(MethodCallExpression node)
             {
@@ -246,10 +230,10 @@ namespace EFCore.Sharding
                     if (value == null)
                         return x => true;
 
-                    string tableName = _rule.GetTableNameByField(value);
+                    string suffix = _rule.GetTableSuffixByField(value);
 
                     var newWhere = DynamicExpressionParser.ParseLambda<string, bool>(
-                        ParsingConfig.Default, false, $@"it == @0", tableName);
+                        ParsingConfig.Default, false, $@"it == @0", suffix);
 
                     return newWhere;
                 }

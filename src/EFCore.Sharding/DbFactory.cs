@@ -1,10 +1,8 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
-using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using System;
-using System.Collections.Generic;
 using System.Data.Common;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -15,14 +13,34 @@ using System.Runtime.CompilerServices;
 
 namespace EFCore.Sharding
 {
-    /// <summary>
-    /// 数据库工厂
-    /// </summary>
-    public static class DbFactory
+    internal class DbFactory : IDbFactory
     {
-        #region 外部接口
+        private readonly ILoggerFactory _loggerFactory;
+        private readonly IShardingConfig _shardingConfig;
+        public DbFactory(ILoggerFactory loggerFactory, IShardingConfig shardingConfig)
+        {
+            _loggerFactory = loggerFactory;
+            _shardingConfig = shardingConfig;
+        }
 
-        internal static AbstractProvider GetProvider(DatabaseType databaseType)
+        public IDbAccessor GetDbAccessor(string conString, DatabaseType dbType, string entityNamespace = null, string suffix = null)
+        {
+            GenericDbContextOptions options = new GenericDbContextOptions
+            {
+                ConnectionString = conString,
+                DbType = dbType,
+                EntityNamespace = entityNamespace,
+                LoggerFactory = _loggerFactory,
+                Suffix = suffix,
+                ShardingConfig = _shardingConfig
+            };
+
+            var dbContext = GetDbContext(options);
+
+            return GetProvider(dbType).GetDbAccessor(dbContext);
+        }
+
+        public static AbstractProvider GetProvider(DatabaseType databaseType)
         {
             string assemblyName = $"EFCore.Sharding.{databaseType}";
             try
@@ -39,74 +57,48 @@ namespace EFCore.Sharding
             }
         }
 
-        /// <summary>
-        /// 根据配置文件获取数据库类型，并返回对应的工厂接口
-        /// </summary>
-        /// <param name="conString">完整数据库链接字符串</param>
-        /// <param name="dbType">数据库类型</param>
-        /// <param name="loggerFactory">日志工厂</param>
-        /// <returns></returns>
-        public static IDbAccessor GetDbAccessor(string conString, DatabaseType dbType, ILoggerFactory loggerFactory = null)
+        public static void CreateTable(string conString, DatabaseType dbType, Type entityType, string suffix)
         {
-            var dbContext = GetDbContext(conString, dbType, null, loggerFactory);
-
-            return GetProvider(dbType).GetDbAccessor(dbContext);
-        }
-
-        /// <summary>
-        /// 获取ShardingDbAccessor
-        /// </summary>
-        /// <param name="absDbName">抽象数据库</param>
-        /// <returns>ShardingDbAccessor</returns>
-        public static IShardingDbAccessor GetShardingDbAccessor(string absDbName = ShardingConfig.DefaultAbsDbName)
-        {
-            ShardingConfig.CheckInit();
-
-            var dbType = ShardingConfig.ConfigProvider.GetAbsDbType(absDbName);
-
-            return new ShardingDbAccessor(GetDbAccessor(string.Empty, dbType), absDbName);
-        }
-
-        internal static void CreateTable(string conString, DatabaseType dbType, Type tableEntityType)
-        {
-            DbContext dbContext = GetDbContext(conString, dbType, new List<Type> { tableEntityType });
-            var databaseCreator = dbContext.Database.GetService<IDatabaseCreator>() as RelationalDatabaseCreator;
-            try
+            GenericDbContextOptions options = new GenericDbContextOptions
             {
-                databaseCreator.CreateTables();
-            }
-            catch
-            {
+                ConnectionString = conString,
+                DbType = dbType,
+                EntityTypes = new Type[] { entityType },
+                Suffix = suffix
+            };
 
+            using (DbContext dbContext = GetDbContext(options))
+            {
+                var databaseCreator = dbContext.Database.GetService<IDatabaseCreator>() as RelationalDatabaseCreator;
+                try
+                {
+                    databaseCreator.CreateTables();
+                }
+                catch
+                {
+
+                }
             }
         }
 
-        internal static BaseDbContext GetDbContext(string conString, DatabaseType dbType, List<Type> entityTypes = null, ILoggerFactory loggerFactory = null)
+        public static GenericDbContext GetDbContext(GenericDbContextOptions options)
         {
-            AbstractProvider provider = GetProvider(dbType);
+            AbstractProvider provider = GetProvider(options.DbType);
 
             DbConnection dbConnection = provider.GetDbConnection();
-            dbConnection.ConnectionString = conString;
+            dbConnection.ConnectionString = options.ConnectionString;
 
-            IModel model;
-            if (entityTypes?.Count > 0)
-                model = DbModelFactory.BuildDbCompiledModel(dbType, entityTypes);
-            else
-                model = DbModelFactory.GetDbCompiledModel(conString, dbType);
             DbContextOptionsBuilder builder = new DbContextOptionsBuilder();
 
             provider.UseDatabase(builder, dbConnection);
+            builder.ReplaceService<IModelCacheKeyFactory, GenericModelCacheKeyFactory>();
 
             builder.EnableSensitiveDataLogging();
-            builder.UseModel(model);
-            builder.UseLoggerFactory(loggerFactory ?? _loggerFactory);
+            builder.UseLoggerFactory(options.LoggerFactory);
 
-            return new BaseDbContext(builder.Options, conString, dbType);
+            options.ContextOptions = builder.Options;
+
+            return new GenericDbContext(options);
         }
-
-        private static ILoggerFactory _loggerFactory =
-            new LoggerFactory(new ILoggerProvider[] { new EFCoreSqlLogeerProvider() });
-
-        #endregion
     }
 }

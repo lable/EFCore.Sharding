@@ -15,14 +15,6 @@ namespace EFCore.Sharding
         #region 数据库相关
 
         /// <summary>
-        /// SQL日志处理方法
-        /// </summary>
-        /// <value>
-        /// The handle SQL log.
-        /// </value>
-        Action<string> HandleSqlLog { set; }
-
-        /// <summary>
         /// 连接字符串
         /// </summary>
         string ConnectionString { get; }
@@ -46,7 +38,7 @@ namespace EFCore.Sharding
         /// </summary>
         /// <typeparam name="T">实体泛型</typeparam>
         /// <param name="entities">实体集合</param>
-        void BulkInsert<T>(List<T> entities) where T : class, new();
+        void BulkInsert<T>(List<T> entities) where T : class;
 
         #endregion
 
@@ -97,48 +89,28 @@ namespace EFCore.Sharding
         /// </summary>
         /// <typeparam name="T">实体泛型</typeparam>
         /// <param name="key">主键</param>
-        int Delete<T>(string key) where T : class, new();
+        int Delete<T>(string key) where T : class;
 
         /// <summary>
         /// 删除单条记录
         /// </summary>
         /// <typeparam name="T">实体泛型</typeparam>
         /// <param name="key">主键</param>
-        Task<int> DeleteAsync<T>(string key) where T : class, new();
+        Task<int> DeleteAsync<T>(string key) where T : class;
 
         /// <summary>
         /// 删除多条记录
         /// </summary>
         /// <typeparam name="T">实体泛型</typeparam>
         /// <param name="keys">多条记录主键集合</param>
-        int Delete<T>(List<string> keys) where T : class, new();
+        int Delete<T>(List<string> keys) where T : class;
 
         /// <summary>
         /// 删除多条记录
         /// </summary>
         /// <typeparam name="T">实体泛型</typeparam>
         /// <param name="keys">多条记录主键集合</param>
-        Task<int> DeleteAsync<T>(List<string> keys) where T : class, new();
-
-        /// <summary>
-        /// 使用SQL语句按照条件删除数据
-        /// 用法:Delete_Sql"Base_User"(x=>x.Id == "Admin")
-        /// 注：生成的SQL类似于DELETE FROM [Base_User] WHERE [Name] = 'xxx' WHERE [Id] = 'Admin'
-        /// </summary>
-        /// <typeparam name="T">实体泛型</typeparam>
-        /// <param name="where">条件</param>
-        /// <returns>影响条数</returns>
-        int Delete_Sql<T>(Expression<Func<T, bool>> where) where T : class, new();
-
-        /// <summary>
-        /// 使用SQL语句按照条件删除数据
-        /// 用法:Delete_Sql"Base_User"(x=>x.Id == "Admin")
-        /// 注：生成的SQL类似于DELETE FROM [Base_User] WHERE [Name] = 'xxx' WHERE [Id] = 'Admin'
-        /// </summary>
-        /// <typeparam name="T">实体泛型</typeparam>
-        /// <param name="where">条件</param>
-        /// <returns>影响条数</returns>
-        Task<int> Delete_SqlAsync<T>(Expression<Func<T, bool>> where) where T : class, new();
+        Task<int> DeleteAsync<T>(List<string> keys) where T : class;
 
         /// <summary>
         /// 使用SQL语句按照条件删除数据
@@ -185,7 +157,7 @@ namespace EFCore.Sharding
         /// <param name="where">筛选条件</param>
         /// <param name="values">字段值设置</param>
         /// <returns>影响条数</returns>
-        int UpdateWhere_Sql<T>(Expression<Func<T, bool>> where, params (string field, UpdateType updateType, object value)[] values) where T : class, new();
+        int Update_Sql<T>(Expression<Func<T, bool>> where, params (string field, UpdateType updateType, object value)[] values) where T : class;
 
         /// <summary>
         /// 使用SQL语句按照条件更新
@@ -196,7 +168,7 @@ namespace EFCore.Sharding
         /// <param name="where">筛选条件</param>
         /// <param name="values">字段值设置</param>
         /// <returns>影响条数</returns>
-        Task<int> UpdateWhere_SqlAsync<T>(Expression<Func<T, bool>> where, params (string field, UpdateType updateType, object value)[] values) where T : class, new();
+        Task<int> Update_SqlAsync<T>(Expression<Func<T, bool>> where, params (string field, UpdateType updateType, object value)[] values) where T : class;
 
         /// <summary>
         /// 使用SQL语句按照条件更新
@@ -208,7 +180,7 @@ namespace EFCore.Sharding
         /// <param name="paramters">参数</param>
         /// <param name="values">字段值设置</param>
         /// <returns>影响条数</returns>
-        int UpdateWhere_Sql(Type entityType, string where, object[] paramters, params (string field, UpdateType updateType, object value)[] values);
+        int Update_Sql(Type entityType, string where, object[] paramters, params (string field, UpdateType updateType, object value)[] values);
 
         /// <summary>
         /// 使用SQL语句按照条件更新
@@ -220,7 +192,7 @@ namespace EFCore.Sharding
         /// <param name="paramters">参数</param>
         /// <param name="values">字段值设置</param>
         /// <returns>影响条数</returns>
-        Task<int> UpdateWhere_SqlAsync(Type entityType, string where, object[] paramters, params (string field, UpdateType updateType, object value)[] values);
+        Task<int> Update_SqlAsync(Type entityType, string where, object[] paramters, params (string field, UpdateType updateType, object value)[] values);
 
         /// <summary>
         /// 使用SQL语句按照条件更新
@@ -230,7 +202,7 @@ namespace EFCore.Sharding
         /// <param name="source">数据源</param>
         /// <param name="values">字段值设置</param>
         /// <returns>影响条数</returns>
-        int UpdateWhere_Sql(IQueryable source, params (string field, UpdateType updateType, object value)[] values);
+        int Update_Sql(IQueryable source, params (string field, UpdateType updateType, object value)[] values);
 
         /// <summary>
         /// 使用SQL语句按照条件更新
@@ -240,7 +212,7 @@ namespace EFCore.Sharding
         /// <param name="source">数据源</param>
         /// <param name="values">字段值设置</param>
         /// <returns>影响条数</returns>
-        Task<int> UpdateWhere_SqlAsync(IQueryable source, params (string field, UpdateType updateType, object value)[] values);
+        Task<int> Update_SqlAsync(IQueryable source, params (string field, UpdateType updateType, object value)[] values);
 
         #endregion
 
@@ -252,7 +224,7 @@ namespace EFCore.Sharding
         /// <typeparam name="T">实体泛型</typeparam>
         /// <param name="keyValue">主键</param>
         /// <returns></returns>
-        T GetEntity<T>(params object[] keyValue) where T : class, new();
+        T GetEntity<T>(params object[] keyValue) where T : class;
 
         /// <summary>
         /// 获取单条记录
@@ -260,7 +232,7 @@ namespace EFCore.Sharding
         /// <typeparam name="T">实体泛型</typeparam>
         /// <param name="keyValue">主键</param>
         /// <returns></returns>
-        Task<T> GetEntityAsync<T>(params object[] keyValue) where T : class, new();
+        Task<T> GetEntityAsync<T>(params object[] keyValue) where T : class;
 
         /// <summary>
         /// 获取列表
@@ -282,7 +254,7 @@ namespace EFCore.Sharding
         /// </summary>
         /// <typeparam name="T">实体泛型</typeparam>
         /// <returns></returns>
-        IQueryable<T> GetIQueryable<T>() where T : class, new();
+        IQueryable<T> GetIQueryable<T>() where T : class;
 
         /// <summary>
         /// 获取IQueryable
@@ -315,7 +287,7 @@ namespace EFCore.Sharding
         /// <param name="sqlStr">SQL语句</param>
         /// <param name="parameters">SQL参数</param>
         /// <returns></returns>
-        List<T> GetListBySql<T>(string sqlStr, params (string paramterName, object value)[] parameters) where T : class, new();
+        List<T> GetListBySql<T>(string sqlStr, params (string paramterName, object value)[] parameters) where T : class;
 
         /// <summary>
         /// 通过SQL获取List
@@ -324,7 +296,7 @@ namespace EFCore.Sharding
         /// <param name="sqlStr">SQL语句</param>
         /// <param name="parameters">SQL参数</param>
         /// <returns></returns>
-        Task<List<T>> GetListBySqlAsync<T>(string sqlStr, params (string paramterName, object value)[] parameters) where T : class, new();
+        Task<List<T>> GetListBySqlAsync<T>(string sqlStr, params (string paramterName, object value)[] parameters) where T : class;
 
         #endregion
 

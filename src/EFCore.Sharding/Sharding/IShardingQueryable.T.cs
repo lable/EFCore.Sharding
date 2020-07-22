@@ -9,7 +9,7 @@ namespace EFCore.Sharding
     /// IShardingQueryable
     /// </summary>
     /// <typeparam name="T">逻辑表泛型</typeparam>
-    public interface IShardingQueryable<T> where T : class, new()
+    public interface IShardingQueryable<T> where T : class
     {
         /// <summary>
         /// 筛选
@@ -113,6 +113,22 @@ namespace EFCore.Sharding
         /// <param name="predicate">表达式</param>
         /// <returns></returns>
         Task<bool> AnyAsync(Expression<Func<T, bool>> predicate);
+
+        /// <summary>
+        /// 去重
+        /// </summary>
+        /// <typeparam name="TResult">数据类型</typeparam>
+        /// <param name="selector">表达式</param>
+        /// <returns></returns>
+        List<TResult> Distinct<TResult>(Expression<Func<T, TResult>> selector);
+
+        /// <summary>
+        /// 去重
+        /// </summary>
+        /// <typeparam name="TResult">数据类型</typeparam>
+        /// <param name="selector">表达式</param>
+        /// <returns></returns>
+        Task<List<TResult>> DistinctAsync<TResult>(Expression<Func<T, TResult>> selector);
 
         /// <summary>
         /// 计算最大值
