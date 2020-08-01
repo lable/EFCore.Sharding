@@ -90,10 +90,9 @@ namespace EFCore.Sharding
 
             DbContextOptionsBuilder builder = new DbContextOptionsBuilder();
 
-            provider.UseDatabase(builder, dbConnection);
+            provider.UseDatabase(builder, dbConnection, options);
             builder.ReplaceService<IModelCacheKeyFactory, GenericModelCacheKeyFactory>();
 
-            builder.EnableSensitiveDataLogging();
             builder.UseLoggerFactory(options.LoggerFactory);
 
             options.ContextOptions = builder.Options;
