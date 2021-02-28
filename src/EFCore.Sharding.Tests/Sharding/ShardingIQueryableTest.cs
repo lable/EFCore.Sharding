@@ -11,7 +11,12 @@ namespace EFCore.Sharding.Tests
     [TestClass]
     public class ShardingIQueryableTest : BaseTest
     {
-        private IShardingDbAccessor _db { get => ServiceProvider.GetService<IShardingDbAccessor>(); }
+        private readonly IShardingDbAccessor _db;
+        public ShardingIQueryableTest()
+        {
+            _db = ServiceProvider.GetService<IShardingDbAccessor>();
+        }
+        
         protected override void Clear()
         {
             _db.DeleteAll<Base_UnitTest>();
@@ -222,6 +227,24 @@ namespace EFCore.Sharding.Tests
             var local = _dataList.Sum(x => x.Age);
             var db = await _db.GetIShardingQueryable<Base_UnitTest>().SumAsync(x => x.Age);
             Assert.AreEqual(local, db);
+        }
+
+        [TestMethod]
+        public void Distinct()
+        {
+            _db.Insert(_dataList);
+            var local = _dataList.Select(x => x.UserName).Distinct().ToList().OrderBy(x => x);
+            var db = _db.GetIShardingQueryable<Base_UnitTest>().Distinct(x => x.UserName).OrderBy(x => x);
+            Assert.AreEqual(local.ToJson(), db.ToJson());
+        }
+
+        [TestMethod]
+        public async Task DistinctAsync()
+        {
+            _db.Insert(_dataList);
+            var local = _dataList.Select(x => x.UserName).Distinct().ToList().OrderBy(x => x);
+            var db = (await _db.GetIShardingQueryable<Base_UnitTest>().DistinctAsync(x => x.UserName)).OrderBy(x => x);
+            Assert.AreEqual(local.ToJson(), db.ToJson());
         }
     }
 }

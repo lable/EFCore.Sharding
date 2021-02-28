@@ -1,4 +1,6 @@
-﻿using System;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+using System;
 using System.Collections.Generic;
 
 namespace EFCore.Sharding.Tests
@@ -19,10 +21,26 @@ namespace EFCore.Sharding.Tests
                 _dataList.Add(newData);
             }
         }
-        public BaseTest()
+        protected BaseTest()
+        {
+            ServiceScope = RootServiceProvider.CreateScope();
+            ServiceProvider = ServiceScope.ServiceProvider;
+        }
+        protected IServiceScope ServiceScope { get; }
+        protected IServiceProvider ServiceProvider { get; }
+
+        [TestInitialize]
+        public virtual void TestInitialize()
         {
             Clear();
         }
+
+        [TestCleanup]
+        public virtual void TestCleanup()
+        {
+            ServiceScope.Dispose();
+        }
+
         protected static List<Base_UnitTest> _insertList { get; }
             = new List<Base_UnitTest>
         {

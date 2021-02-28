@@ -1,5 +1,4 @@
-﻿using EFCore.Sharding.Tests.Util;
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -13,7 +12,12 @@ namespace EFCore.Sharding.Tests
     [TestClass]
     public class ShardingDbAccessorTest : BaseTest
     {
-        private IShardingDbAccessor _db { get => ServiceProvider.GetService<IShardingDbAccessor>(); }
+        private readonly IShardingDbAccessor _db;
+        public ShardingDbAccessorTest()
+        {
+            _db = ServiceProvider.GetService<IShardingDbAccessor>();
+        }
+
         protected override void Clear()
         {
             _db.DeleteAll<Base_UnitTest>();
@@ -33,22 +37,6 @@ namespace EFCore.Sharding.Tests
             await _db.InsertAsync(_newData);
             var theData = await _db.GetIShardingQueryable<Base_UnitTest>().FirstOrDefaultAsync();
             Assert.AreEqual(_newData.ToJson(), theData.ToJson());
-        }
-
-        [TestMethod]
-        public void Insert_multiple()
-        {
-            _db.Insert(_insertList);
-            var theList = _db.GetList<Base_UnitTest>();
-            Assert.AreEqual(_insertList.OrderBy(X => X.Id).ToJson(), theList.OrderBy(X => X.Id).ToJson());
-        }
-
-        [TestMethod]
-        public async Task InsertAsync_multiple()
-        {
-            await _db.InsertAsync(_insertList);
-            var theList = await _db.GetListAsync<Base_UnitTest>();
-            Assert.AreEqual(_insertList.OrderBy(X => X.Id).ToJson(), theList.OrderBy(X => X.Id).ToJson());
         }
 
         [TestMethod]
@@ -124,6 +112,15 @@ namespace EFCore.Sharding.Tests
         }
 
         [TestMethod]
+        public async Task Delete_Sql()
+        {
+            _db.Insert(_insertList);
+            await _db.DeleteSqlAsync<Base_UnitTest>(x => x.UserId == "Admin2");
+            var count = _db.GetIShardingQueryable<Base_UnitTest>().Count();
+            Assert.AreEqual(1, count);
+        }
+
+        [TestMethod]
         public void Update_single()
         {
             _db.Insert(_newData);
@@ -177,7 +174,7 @@ namespace EFCore.Sharding.Tests
             newUpdateData.UserName = "普通管理员";
             newUpdateData.UserId = "xiaoming";
             newUpdateData.Age = 100;
-            _db.UpdateAny(newUpdateData, new List<string> { "UserName", "Age" });
+            _db.Update(newUpdateData, new List<string> { "UserName", "Age" });
             var dbSingleData = _db.GetIShardingQueryable<Base_UnitTest>().FirstOrDefault();
             newUpdateData.UserId = "Admin";
             Assert.AreEqual(newUpdateData.ToJson(), dbSingleData.ToJson());
@@ -191,7 +188,7 @@ namespace EFCore.Sharding.Tests
             newUpdateData.UserName = "普通管理员";
             newUpdateData.UserId = "xiaoming";
             newUpdateData.Age = 100;
-            await _db.UpdateAnyAsync(newUpdateData, new List<string> { "UserName", "Age" });
+            await _db.UpdateAsync(newUpdateData, new List<string> { "UserName", "Age" });
             var dbSingleData = _db.GetIShardingQueryable<Base_UnitTest>().FirstOrDefault();
             newUpdateData.UserId = "Admin";
             Assert.AreEqual(newUpdateData.ToJson(), dbSingleData.ToJson());
@@ -215,8 +212,8 @@ namespace EFCore.Sharding.Tests
                 aData.UserName = "测试";
             });
 
-            _db.UpdateAny(newList1, new List<string> { "UserName", "Age" });
-            var dbData = _db.GetList<Base_UnitTest>();
+            _db.Update(newList1, new List<string> { "UserName", "Age" });
+            var dbData = _db.GetIShardingQueryable<Base_UnitTest>().ToList();
             Assert.AreEqual(newList2.OrderBy(x => x.Id).ToJson(), dbData.OrderBy(x => x.Id).ToJson());
         }
 
@@ -238,8 +235,8 @@ namespace EFCore.Sharding.Tests
                 aData.UserName = "测试";
             });
 
-            await _db.UpdateAnyAsync(newList1, new List<string> { "UserName", "Age" });
-            var dbData = _db.GetList<Base_UnitTest>();
+            await _db.UpdateAsync(newList1, new List<string> { "UserName", "Age" });
+            var dbData = _db.GetIShardingQueryable<Base_UnitTest>().ToList();
             Assert.AreEqual(newList2.OrderBy(x => x.Id).ToJson(), dbData.OrderBy(x => x.Id).ToJson());
         }
 
@@ -247,7 +244,7 @@ namespace EFCore.Sharding.Tests
         public void UpdateWhere()
         {
             _db.Insert(_newData);
-            _db.UpdateWhere<Base_UnitTest>(x => x.UserId == "Admin", x =>
+            _db.Update<Base_UnitTest>(x => x.UserId == "Admin", x =>
             {
                 x.UserId = "Admin2";
             });
@@ -259,30 +256,12 @@ namespace EFCore.Sharding.Tests
         public async Task UpdateWhereAsync()
         {
             _db.Insert(_newData);
-            await _db.UpdateWhereAsync<Base_UnitTest>(x => x.UserId == "Admin", x =>
+            await _db.UpdateAsync<Base_UnitTest>(x => x.UserId == "Admin", x =>
             {
                 x.UserId = "Admin2";
             });
 
             Assert.IsTrue(_db.GetIShardingQueryable<Base_UnitTest>().Any(x => x.UserId == "Admin2"));
-        }
-
-        [TestMethod]
-        public void GetList()
-        {
-            _db.Insert(_dataList);
-            var local = _dataList.OrderBy(x => x.Id).ToJson();
-            var db = _db.GetList<Base_UnitTest>().OrderBy(x => x.Id).ToJson();
-            Assert.AreEqual(local, db);
-        }
-
-        [TestMethod]
-        public async Task GetListAsync()
-        {
-            _db.Insert(_dataList);
-            var local = _dataList.OrderBy(x => x.Id).ToJson();
-            var db = (await _db.GetListAsync<Base_UnitTest>()).OrderBy(x => x.Id).ToJson();
-            Assert.AreEqual(local, db);
         }
 
         [TestMethod]
@@ -346,8 +325,8 @@ namespace EFCore.Sharding.Tests
         [TestMethod]
         public void RunTransaction_isolationLevel()
         {
-            var db1 = DbFactory.GetShardingDbAccessor();
-            var db2 = DbFactory.GetShardingDbAccessor();
+            var db1 = ServiceProvider.GetService<IShardingDbAccessor>();
+            var db2 = ServiceProvider.CreateScope().ServiceProvider.GetService<IShardingDbAccessor>();
             db1.Insert(_newData);
 
             var updateData = _newData.DeepClone();

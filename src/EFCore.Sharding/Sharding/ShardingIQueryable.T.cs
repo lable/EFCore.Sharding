@@ -1,5 +1,4 @@
-﻿using EFCore.Sharding.Util;
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -9,55 +8,54 @@ using System.Threading.Tasks;
 
 namespace EFCore.Sharding
 {
-    internal class ShardingQueryable<T> : IShardingQueryable<T> where T : class, new()
+    internal class ShardingQueryable<T> : IShardingQueryable<T> where T : class
     {
+        private readonly IShardingConfig _shardingConfig;
+        private readonly IDbFactory _dbFactory;
+
         #region 构造函数
 
-        public ShardingQueryable(IQueryable<T> source, ShardingDbAccessor repository, string absDbName)
+        public ShardingQueryable(IQueryable<T> source, ShardingDbAccessor shardingDb, IShardingConfig shardingConfig, IDbFactory dbFactory)
         {
             _source = source;
             _absTableName = AnnotationHelper.GetDbTableName(source.ElementType);
-            _absDbName = absDbName;
-            _repository = repository;
+            _shardingConfig = shardingConfig;
+            _shardingDb = shardingDb;
+            _dbFactory = dbFactory;
         }
 
         #endregion
 
         #region 私有成员
 
-        ShardingDbAccessor _repository { get; }
+        ShardingDbAccessor _shardingDb { get; }
         private string _absDbName { get; }
         private string _absTableName { get; }
         private IQueryable<T> _source { get; set; }
-        private Type MapTable(string targetTableName)
-        {
-            return DbModelFactory.GetEntityType(targetTableName);
-        }
         private async Task<List<TResult>> GetStatisDataAsync<TResult>(Func<IQueryable, Task<TResult>> access, IQueryable newSource = null)
         {
             newSource = newSource ?? _source;
-            var tables = ShardingConfig.ConfigProvider.GetReadTables(_absTableName, _absDbName, _source);
+            var tables = _shardingConfig.GetReadTables(_source);
 
             List<Task<TResult>> tasks = new List<Task<TResult>>();
             SynchronizedCollection<IDbAccessor> dbs = new SynchronizedCollection<IDbAccessor>();
             tasks = tables.Select(aTable =>
             {
                 IDbAccessor db;
-                if (_repository.OpenedTransaction)
-                    db = _repository.GetMapDbAccessor(aTable.conString, aTable.dbType);
+                if (_shardingDb.OpenedTransaction)
+                    db = _shardingDb.GetMapDbAccessor(aTable.conString, aTable.dbType, aTable.suffix);
                 else
-                    db = DbFactory.GetDbAccessor(aTable.conString, aTable.dbType);
+                    db = _dbFactory.GetDbAccessor(aTable.conString, aTable.dbType, null, aTable.suffix);
 
                 dbs.Add(db);
-                var targetTable = MapTable(aTable.tableName);
-                var targetIQ = db.GetIQueryable(targetTable);
-                var newQ = newSource.ChangeSource(targetIQ);
+                var targetIQ = db.GetIQueryable<T>();
+                var newQ = newSource.ReplaceQueryable(targetIQ);
 
                 return access(newQ);
             }).ToList();
             var res = (await Task.WhenAll(tasks)).ToList();
 
-            if (!_repository.OpenedTransaction)
+            if (!_shardingDb.OpenedTransaction)
                 dbs.ForEach(x => x.Dispose());
 
             return res;
@@ -161,20 +159,19 @@ namespace EFCore.Sharding
                 noPaginSource = noPaginSource.Take(take.Value + skip.Value);
 
             //从各个分表获取数据
-            var tables = ShardingConfig.ConfigProvider.GetReadTables(_absTableName, _absDbName, _source);
+            var tables = _shardingConfig.GetReadTables(_source);
             SynchronizedCollection<IDbAccessor> dbs = new SynchronizedCollection<IDbAccessor>();
             List<Task<List<T>>> tasks = tables.Select(aTable =>
             {
-                var targetTable = MapTable(aTable.tableName);
                 IDbAccessor db;
-                if (_repository.OpenedTransaction)
-                    db = _repository.GetMapDbAccessor(aTable.conString, aTable.dbType);
+                if (_shardingDb.OpenedTransaction)
+                    db = _shardingDb.GetMapDbAccessor(aTable.conString, aTable.dbType, aTable.suffix);
                 else
-                    db = DbFactory.GetDbAccessor(aTable.conString, aTable.dbType);
+                    db = _dbFactory.GetDbAccessor(aTable.conString, aTable.dbType, null, aTable.suffix);
                 dbs.Add(db);
 
-                var targetIQ = db.GetIQueryable(targetTable);
-                var newQ = noPaginSource.ChangeSource(targetIQ);
+                var targetIQ = db.GetIQueryable<T>();
+                var newQ = noPaginSource.ReplaceQueryable(targetIQ);
                 return newQ
                     .Cast<object>()
                     .Select(x => x.ChangeType<T>())
@@ -183,7 +180,7 @@ namespace EFCore.Sharding
             List<T> all = new List<T>();
             (await Task.WhenAll(tasks.ToArray())).ToList().ForEach(x => all.AddRange(x));
 
-            if (!_repository.OpenedTransaction)
+            if (!_shardingDb.OpenedTransaction)
                 dbs.ForEach(x => x.Dispose());
             //合并数据
             var resList = all;
@@ -214,6 +211,22 @@ namespace EFCore.Sharding
                 q = q.OrderBy($"{sortColumn} {sortType}");
 
             return q.FirstOrDefault();
+        }
+        public List<TResult> Distinct<TResult>(Expression<Func<T, TResult>> selector)
+        {
+            return AsyncHelper.RunSync(() => DistinctAsync(selector));
+        }
+        public async Task<List<TResult>> DistinctAsync<TResult>(Expression<Func<T, TResult>> selector)
+        {
+            var newSource = _source.Select(selector);
+
+            var results = await GetStatisDataAsync<List<TResult>>(x =>
+            {
+                var q = Queryable.Distinct((dynamic)x);
+                return EntityFrameworkQueryableExtensions.ToListAsync(q);
+            }, newSource);
+
+            return results.SelectMany(x => x).Distinct().ToList();
         }
         public TResult Max<TResult>(Expression<Func<T, TResult>> selector)
         {

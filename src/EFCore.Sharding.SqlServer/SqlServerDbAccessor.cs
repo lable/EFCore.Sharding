@@ -1,17 +1,21 @@
-﻿using EFCore.Sharding.Util;
-using Microsoft.EntityFrameworkCore.Storage;
+﻿using Microsoft.EntityFrameworkCore.Storage;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Data;
-using System.Data.SqlClient;
 using System.Linq;
+
+#if EFCORE2
+using System.Data.SqlClient;
+#else
+using Microsoft.Data.SqlClient;
+#endif
 
 namespace EFCore.Sharding.SqlServer
 {
-    internal class SqlServerDbAccessor : AbstractDbAccessor, IDbAccessor
+    internal class SqlServerDbAccessor : GenericDbAccessor, IDbAccessor
     {
-        public SqlServerDbAccessor(BaseDbContext baseDbContext)
+        public SqlServerDbAccessor(GenericDbContext baseDbContext)
             : base(baseDbContext)
         {
         }
@@ -21,13 +25,18 @@ namespace EFCore.Sharding.SqlServer
             return $"[{name}]";
         }
 
-        public override void BulkInsert<T>(List<T> entities)
+        public override void BulkInsert<T>(List<T> entities, string tableName = null)
         {
             using (var bulkCopy = GetSqlBulkCopy())
             {
+                bulkCopy.BulkCopyTimeout = 0;
+
                 bulkCopy.BatchSize = entities.Count;
-                var tableAttribute = (TableAttribute)typeof(T).GetCustomAttributes(typeof(TableAttribute), false).First();
-                var tableName = tableAttribute.Name;
+                if (tableName.IsNullOrEmpty())
+                {
+                    var tableAttribute = (TableAttribute)typeof(T).GetCustomAttributes(typeof(TableAttribute), false).First();
+                    tableName = tableAttribute.Name;
+                }
                 bulkCopy.DestinationTableName = tableName;
 
                 var table = new DataTable();

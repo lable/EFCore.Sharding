@@ -1,5 +1,4 @@
-﻿using EFCore.Sharding.Util;
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
@@ -9,54 +8,33 @@ using System.Threading.Tasks;
 
 namespace EFCore.Sharding
 {
-    internal class ShardingDbAccessor : IShardingDbAccessor
+    internal class ShardingDbAccessor : DefaultBaseDbAccessor, IShardingDbAccessor
     {
+        private readonly IShardingConfig _shardingConfig;
+        private readonly IDbFactory _dbFactory;
+
         #region 构造函数
 
-        public ShardingDbAccessor(IDbAccessor db, string absDbName)
+        public ShardingDbAccessor(IShardingConfig shardingConfig, IDbFactory dbFactory)
         {
-            _db = db;
-            _absDbName = absDbName;
+            _shardingConfig = shardingConfig;
+            _dbFactory = dbFactory;
+            var dbType = shardingConfig.FindADbType();
+            _db = _dbFactory.GetDbAccessor(dbType.GetDefaultString(), dbType);
         }
 
         #endregion
 
         #region 私有成员
 
-        private string _absDbName { get; }
         private IDbAccessor _db { get; }
-        private Type MapTable(string targetTableName)
+        private string GetDbId(string conString, DatabaseType dbType, string suffix)
         {
-            return DbModelFactory.GetEntityType(targetTableName);
-        }
-        private List<(string targetTableName, IDbAccessor targetDb)> GetTargetDb(List<(string tableName, string conString, DatabaseType dbType)> configs)
-        {
-            var resList = configs
-                .Select(x => (x.tableName, GetMapDbAccessor(x.conString, x.dbType)))
-                .ToList();
-
-            return resList;
-        }
-        private List<(object targetObj, IDbAccessor targetDb)> GetMapConfigs<T>(List<T> entities)
-        {
-            List<(object targetObj, IDbAccessor targetDb)> resList = new List<(object targetObj, IDbAccessor targetDb)>();
-            entities.ForEach(aEntity =>
-            {
-                (string tableName, string conString, DatabaseType dbType) = ShardingConfig.ConfigProvider.GetTheWriteTable<T>(aEntity, _absDbName);
-                var targetDb = _repositories[GetDbId(conString, dbType)];
-                var targetObj = aEntity.ChangeType(MapTable(tableName));
-                resList.Add((targetObj, targetDb));
-            });
-
-            return resList;
-        }
-        private string GetDbId(string conString, DatabaseType dbType)
-        {
-            return $"{conString}{dbType.ToString()}";
+            return $"{conString}{dbType}{suffix}";
         }
         private async Task<int> PackAccessDataAsync(Func<Task<int>> access)
         {
-            var dbs = _repositories.Values.ToArray();
+            var dbs = _dbs.Values.ToArray();
 
             int count = 0;
             if (!OpenedTransaction)
@@ -72,7 +50,7 @@ namespace EFCore.Sharding
                     if (!Success)
                         throw ex;
                 }
-                ClearRepositories();
+                ClearDbs();
                 return count;
             }
             else
@@ -83,27 +61,32 @@ namespace EFCore.Sharding
 
             return count;
         }
-        private async Task<int> WriteTableAsync<T>(List<T> entities, Func<object, IDbAccessor, Task<int>> accessDataAsync)
+        private async Task<int> WriteTableAsync<T>(List<T> entities, Func<T, IDbAccessor, Task<int>> accessDataAsync)
         {
-            var configs = ShardingConfig.ConfigProvider.GetAllWriteTables<T>(_absDbName);
-            var targetDbs = GetTargetDb(configs);
-
-            var mapConfigs = GetMapConfigs(entities);
+            List<(T obj, IDbAccessor db)> targetDbs = entities
+                .Select(x => new
+                {
+                    Obj = x,
+                    Conifg = _shardingConfig.GetTheWriteTable(x)
+                })
+                .ToList()
+                .Select(x => (x.Obj, GetMapDbAccessor(x.Conifg.conString, x.Conifg.dbType, x.Conifg.suffix)))
+                .ToList();
 
             return await PackAccessDataAsync(async () =>
             {
                 //同一个IDbAccessor对象只能在一个线程中
                 List<Task<int>> tasks = new List<Task<int>>();
-                var dbs = mapConfigs.Select(x => x.targetDb).Distinct().ToList();
+                var dbs = targetDbs.Select(x => x.db).Distinct().ToList();
                 dbs.ForEach(aDb =>
                 {
                     tasks.Add(Task.Run(async () =>
                     {
                         int count = 0;
-                        var objs = mapConfigs.Where(x => x.targetDb == aDb).ToList();
+                        var objs = targetDbs.Where(x => x.db == aDb).ToList();
                         foreach (var aObj in objs)
                         {
-                            count += await accessDataAsync(aObj.targetObj, aObj.targetDb);
+                            count += await accessDataAsync(aObj.obj, aObj.db);
                         }
 
                         return count;
@@ -114,12 +97,12 @@ namespace EFCore.Sharding
             });
         }
         private DistributedTransaction _transaction { get; set; }
-        private ConcurrentDictionary<string, IDbAccessor> _repositories { get; }
+        private ConcurrentDictionary<string, IDbAccessor> _dbs { get; }
             = new ConcurrentDictionary<string, IDbAccessor>();
-        private void ClearRepositories()
+        private void ClearDbs()
         {
-            _repositories.ForEach(x => x.Value.Dispose());
-            _repositories.Clear();
+            _dbs.ForEach(x => x.Value.Dispose());
+            _dbs.Clear();
         }
 
         #endregion
@@ -127,210 +110,91 @@ namespace EFCore.Sharding
         #region 外部接口
 
         public bool OpenedTransaction { get; set; } = false;
-
-        public IDbAccessor GetMapDbAccessor(string conString, DatabaseType dbType)
+        public IDbAccessor GetMapDbAccessor(string conString, DatabaseType dbType, string suffix)
         {
-            var dbId = GetDbId(conString, dbType);
-            if (!_repositories.ContainsKey(dbId))
-                _repositories[dbId] = DbFactory.GetDbAccessor(conString, dbType);
+            var dbId = GetDbId(conString, dbType, suffix);
+            IDbAccessor db = _dbs.GetOrAdd(dbId, key => _dbFactory.GetDbAccessor(conString, dbType, null, suffix));
 
-            var db = _repositories[dbId];
             if (OpenedTransaction)
                 _transaction.AddDbAccessor(db);
 
-            return _repositories[dbId];
+            return db;
         }
-
-        public int Insert<T>(T entity) where T : class, new()
-        {
-            return Insert(new List<T> { entity });
-        }
-        public async Task<int> InsertAsync<T>(T entity) where T : class, new()
-        {
-            return await InsertAsync(new List<T> { entity });
-        }
-        public int Insert<T>(List<T> entities) where T : class, new()
-        {
-            return AsyncHelper.RunSync(() => InsertAsync(entities));
-        }
-        public async Task<int> InsertAsync<T>(List<T> entities) where T : class, new()
+        public override async Task<int> InsertAsync<T>(List<T> entities, bool tracking = false) where T : class
         {
             return await WriteTableAsync(entities, (targetObj, targetDb) => targetDb.InsertAsync(targetObj));
         }
-        public int DeleteAll<T>() where T : class, new()
+        public override async Task<int> DeleteAllAsync<T>() where T : class
         {
-            return AsyncHelper.RunSync(() => DeleteAllAsync<T>());
-        }
-        public async Task<int> DeleteAllAsync<T>() where T : class, new()
-        {
-            var configs = ShardingConfig.ConfigProvider.GetAllWriteTables<T>(_absDbName);
-            var targetDbs = GetTargetDb(configs);
+            var configs = _shardingConfig.GetWriteTables<T>();
             return await PackAccessDataAsync(async () =>
             {
-                var tasks = targetDbs.Select(x => x.targetDb.DeleteAllAsync(MapTable(x.targetTableName)));
+                var tasks = configs.Select(x => GetMapDbAccessor(x.conString, x.dbType, x.suffix).DeleteAllAsync<T>());
                 return (await Task.WhenAll(tasks.ToArray())).Sum();
             });
         }
-        public int Delete<T>(T entity) where T : class, new()
-        {
-            return Delete(new List<T> { entity });
-        }
-        public async Task<int> DeleteAsync<T>(T entity) where T : class, new()
-        {
-            return await DeleteAsync(new List<T> { entity });
-        }
-        public int Delete<T>(List<T> entities) where T : class, new()
-        {
-            return AsyncHelper.RunSync(() => DeleteAsync(entities));
-        }
-        public async Task<int> DeleteAsync<T>(List<T> entities) where T : class, new()
+        public override async Task<int> DeleteAsync<T>(List<T> entities) where T : class
         {
             return await WriteTableAsync(entities, (targetObj, targetDb) => targetDb.DeleteAsync(targetObj));
         }
-        public int Delete<T>(Expression<Func<T, bool>> condition) where T : class, new()
-        {
-            return AsyncHelper.RunSync(() => DeleteAsync(condition));
-        }
-        public async Task<int> DeleteAsync<T>(Expression<Func<T, bool>> condition) where T : class, new()
+        public override async Task<int> DeleteAsync<T>(Expression<Func<T, bool>> condition) where T : class
         {
             var deleteList = GetIShardingQueryable<T>().Where(condition).ToList();
 
             return await DeleteAsync(deleteList);
         }
-        public int Update<T>(T entity) where T : class, new()
+        public override async Task<int> DeleteSqlAsync<T>(Expression<Func<T, bool>> where) where T : class
         {
-            return Update(new List<T> { entity });
+            var q = _db.GetIQueryable<T>().Where(where);
+            var configs = _shardingConfig.GetWriteTables<T>(q);
+            return await PackAccessDataAsync(async () =>
+            {
+                var tasks = configs.Select(x => GetMapDbAccessor(x.conString, x.dbType, x.suffix).DeleteSqlAsync<T>(where));
+                return (await Task.WhenAll(tasks.ToArray())).Sum();
+            });
         }
-        public async Task<int> UpdateAsync<T>(T entity) where T : class, new()
-        {
-            return await UpdateAsync(new List<T> { entity });
-        }
-        public int Update<T>(List<T> entities) where T : class, new()
-        {
-            return AsyncHelper.RunSync(() => UpdateAsync(entities));
-        }
-        public async Task<int> UpdateAsync<T>(List<T> entities) where T : class, new()
+        public override async Task<int> UpdateAsync<T>(List<T> entities, bool tracking = false) where T : class
         {
             return await WriteTableAsync(entities, (targetObj, targetDb) => targetDb.UpdateAsync(targetObj));
         }
-        public int UpdateAny<T>(T entity, List<string> properties) where T : class, new()
+        public override async Task<int> UpdateAsync<T>(List<T> entities, List<string> properties, bool tracking = false) where T : class
         {
-            return UpdateAny(new List<T> { entity }, properties);
+            return await WriteTableAsync(entities, (targetObj, targetDb) => targetDb.UpdateAsync(targetObj, properties));
         }
-        public async Task<int> UpdateAnyAsync<T>(T entity, List<string> properties) where T : class, new()
-        {
-            return await UpdateAnyAsync(new List<T> { entity }, properties);
-        }
-        public int UpdateAny<T>(List<T> entities, List<string> properties) where T : class, new()
-        {
-            return AsyncHelper.RunSync(() => UpdateAnyAsync(entities, properties));
-        }
-        public async Task<int> UpdateAnyAsync<T>(List<T> entities, List<string> properties) where T : class, new()
-        {
-            return await WriteTableAsync(entities, (targetObj, targetDb) => targetDb.UpdateAnyAsync(targetObj, properties));
-        }
-        public int UpdateWhere<T>(Expression<Func<T, bool>> whereExpre, Action<T> set) where T : class, new()
-        {
-            return AsyncHelper.RunSync(() => UpdateWhereAsync(whereExpre, set));
-        }
-        public async Task<int> UpdateWhereAsync<T>(Expression<Func<T, bool>> whereExpre, Action<T> set) where T : class, new()
+        public override async Task<int> UpdateAsync<T>(Expression<Func<T, bool>> whereExpre, Action<T> set, bool tracking = false) where T : class
         {
             var list = GetIShardingQueryable<T>().Where(whereExpre).ToList();
             list.ForEach(aData => set(aData));
             return await UpdateAsync(list);
         }
-        public IShardingQueryable<T> GetIShardingQueryable<T>() where T : class, new()
+        public IShardingQueryable<T> GetIShardingQueryable<T>() where T : class
         {
-            return new ShardingQueryable<T>(_db.GetIQueryable<T>(), this, _absDbName);
-        }
-        public List<T> GetList<T>() where T : class, new()
-        {
-            return GetIShardingQueryable<T>().ToList();
-        }
-        public async Task<List<T>> GetListAsync<T>() where T : class, new()
-        {
-            return await GetIShardingQueryable<T>().ToListAsync();
+            return new ShardingQueryable<T>(_db.GetIQueryable<T>(), this, _shardingConfig, _dbFactory);
         }
 
         #endregion
 
         #region 事物处理
 
-        public (bool Success, Exception ex) RunTransaction(Action action, IsolationLevel isolationLevel = IsolationLevel.ReadCommitted)
-        {
-            bool isOK = true;
-            Exception resEx = null;
-            try
-            {
-                BeginTransaction(isolationLevel);
-
-                action();
-
-                CommitTransaction();
-            }
-            catch (Exception ex)
-            {
-                RollbackTransaction();
-                isOK = false;
-                resEx = ex;
-            }
-            finally
-            {
-                DisposeTransaction();
-            }
-
-            return (isOK, resEx);
-        }
-        public async Task<(bool Success, Exception ex)> RunTransactionAsync(Func<Task> action, IsolationLevel isolationLevel = IsolationLevel.ReadCommitted)
-        {
-            bool isOK = true;
-            Exception resEx = null;
-            try
-            {
-                await BeginTransactionAsync(isolationLevel);
-
-                await action();
-
-                CommitTransaction();
-            }
-            catch (Exception ex)
-            {
-                RollbackTransaction();
-                isOK = false;
-                resEx = ex;
-            }
-            finally
-            {
-                DisposeTransaction();
-            }
-
-            return (isOK, resEx);
-        }
-        public void BeginTransaction(IsolationLevel isolationLevel)
-        {
-            OpenedTransaction = true;
-            _transaction = new DistributedTransaction();
-            _transaction.BeginTransaction(isolationLevel);
-        }
-        public async Task BeginTransactionAsync(IsolationLevel isolationLevel)
+        public override async Task BeginTransactionAsync(IsolationLevel isolationLevel)
         {
             OpenedTransaction = true;
             _transaction = new DistributedTransaction();
             await _transaction.BeginTransactionAsync(isolationLevel);
         }
-        public void CommitTransaction()
+        public override void CommitTransaction()
         {
             _transaction.CommitTransaction();
         }
-        public void RollbackTransaction()
+        public override void RollbackTransaction()
         {
             _transaction.RollbackTransaction();
         }
-        public void DisposeTransaction()
+        public override void DisposeTransaction()
         {
             OpenedTransaction = false;
             _transaction.DisposeTransaction();
-            ClearRepositories();
+            ClearDbs();
         }
 
         #endregion
@@ -338,14 +202,14 @@ namespace EFCore.Sharding
         #region Dispose
 
         private bool _disposed = false;
-        public virtual void Dispose()
+        public override void Dispose()
         {
             if (_disposed)
                 return;
 
             _disposed = true;
             _transaction?.Dispose();
-            ClearRepositories();
+            ClearDbs();
         }
 
         #endregion

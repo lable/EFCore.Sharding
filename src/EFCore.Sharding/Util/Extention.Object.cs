@@ -1,14 +1,26 @@
 ﻿using Castle.DynamicProxy;
 using Dynamitey;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Serialization;
 using System;
 using System.ComponentModel;
 using System.Reflection;
 
-namespace EFCore.Sharding.Util
+namespace EFCore.Sharding
 {
     internal static partial class Extention
     {
+        static Extention()
+        {
+            JsonConvert.DefaultSettings = () => DefaultJsonSetting;
+        }
+        public static JsonSerializerSettings DefaultJsonSetting = new JsonSerializerSettings
+        {
+            ContractResolver = new DefaultContractResolver(),
+            DateFormatHandling = DateFormatHandling.MicrosoftDateFormat,
+            DateFormatString = "yyyy-MM-dd HH:mm:ss.fff"
+        };
+
         private static readonly BindingFlags _bindingFlags
             = BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public | BindingFlags.Static;
         private static readonly ProxyGenerator Generator = new ProxyGenerator();
@@ -47,7 +59,27 @@ namespace EFCore.Sharding.Util
         /// <returns></returns>
         public static object GetPropertyValue(this object obj, string propertyName)
         {
-            return obj.GetType().GetProperty(propertyName, _bindingFlags).GetValue(obj);
+            var property = obj.GetType().GetProperty(propertyName, _bindingFlags);
+            if (property != null)
+            {
+                return obj.GetType().GetProperty(propertyName, _bindingFlags).GetValue(obj);
+            }
+            else
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 设置某属性值
+        /// </summary>
+        /// <param name="obj">对象</param>
+        /// <param name="propertyName">属性名</param>
+        /// <param name="value">属性值</param>
+        /// <returns></returns>
+        public static void SetPropertyValue(this object obj, string propertyName, object value)
+        {
+            obj.GetType().GetProperty(propertyName, _bindingFlags).SetValue(obj, value);
         }
 
         /// <summary>
