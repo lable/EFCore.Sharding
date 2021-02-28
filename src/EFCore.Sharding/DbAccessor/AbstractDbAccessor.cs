@@ -35,7 +35,7 @@ namespace EFCore.Sharding
         /// 提供给测试工程使用
         /// y
         /// </summary>
-        internal BaseDbContext DbContext { get { return _db; } }
+        internal GenericDbContext DbContext { get { return _db; } }
 
         #region 私有成员
 

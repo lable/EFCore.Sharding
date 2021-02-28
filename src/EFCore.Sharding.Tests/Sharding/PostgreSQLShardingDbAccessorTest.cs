@@ -9,7 +9,8 @@ namespace EFCore.Sharding.Tests.Sharding
     [TestClass]
     public class PostgreSQLShardingDbAccessorTest : BaseTest
     {
-        protected virtual IShardingDbAccessor _db { get; } = DbFactory.GetShardingDbAccessor("postgres"); //ServiceProvider.GetService<IShardingDbAccessor>();
+        //protected virtual IShardingDbAccessor _db { get; } = DbFactory.GetShardingDbAccessor("postgres"); //ServiceProvider.GetService<IShardingDbAccessor>();
+        protected virtual IShardingDbAccessor _db { get => ServiceProvider.GetService<IShardingDbAccessor>(); }
 
         protected static SqlDefaultTestModel _defaultData { get; } = new SqlDefaultTestModel
         {
