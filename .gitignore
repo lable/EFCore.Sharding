@@ -260,3 +260,4 @@ paket-files/
 __pycache__/
 *.pyc
 /src/Coldairarrow.Web/Upload/Img/2018-10-25
+/.vscode/settings.json
